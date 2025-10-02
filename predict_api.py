@@ -5,7 +5,6 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 import uvicorn
 
-# Load model + features
 model = joblib.load("climate_model_regularized.pkl")
 features = joblib.load("features_regularized.pkl")
 
@@ -41,5 +40,6 @@ def predict(data: Inputs):
     }
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8080))  # 👈 Use Render’s PORT
+    port = int(os.environ.get("PORT", 8080))  
     uvicorn.run(app, host="0.0.0.0", port=port)
+
