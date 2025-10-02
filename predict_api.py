@@ -1,14 +1,14 @@
 import os
-import joblib
 import pandas as pd
+import xgboost as xgb
 from fastapi import FastAPI
 from pydantic import BaseModel
 import uvicorn
 
-model = joblib.load("climate_model_regularized.pkl")
-features = joblib.load("features_regularized.pkl")
+model = xgb.XGBRegressor()
+model.load_model("climate_model.json")  
 
-df = pd.read_csv("climate_merged.csv", parse_dates=["date"])
+df = pd.read_csv(r"climate_merged.csv", parse_dates=["date"])
 last_tas = df["tas"].iloc[-1]
 
 app = FastAPI()
@@ -28,7 +28,7 @@ def predict(data: Inputs):
         data.precip,
         last_tas
     ]]
-    pred = model.predict(X)[0]
+    pred = model.predict(pd.DataFrame(X, columns=["sst","co2","land_temp","precip","tas"]))[0]
 
     alpha = 0.7
     calibrated = alpha * pred + (1 - alpha) * last_tas
@@ -40,6 +40,5 @@ def predict(data: Inputs):
     }
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8080))  
+    port = int(os.environ.get("PORT", 8080))
     uvicorn.run(app, host="0.0.0.0", port=port)
-
