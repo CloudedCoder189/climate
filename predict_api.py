@@ -1,48 +1,50 @@
+import os
+import pandas as pd
+import xgboost as xgb
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-import joblib
-import numpy as np
+from pydantic import BaseModel
+import uvicorn
 
-# Initialize FastAPI app
+# -------------------------------
+# Load model + data
+# -------------------------------
+model = xgb.XGBRegressor()
+model.load_model("climate_model.json")  # ✅ load JSON model
+
+df = pd.read_csv("climate_merged.csv", parse_dates=["date"])
+last_tas = df["tas"].iloc[-1]
+
+# -------------------------------
+# FastAPI app
+# -------------------------------
 app = FastAPI()
 
-# ✅ Enable CORS so your frontend can talk to this API
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],   # in production, replace "*" with your frontend URL
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# Load your model
-model = joblib.load("climate_model.pkl")
-
-@app.get("/")
-def read_root():
-    return {"message": "🌍 Climate Prediction API is live! Use POST /predict to get predictions."}
+class Inputs(BaseModel):
+    sst: float
+    co2: float
+    land_temp: float
+    precip: float
 
 @app.post("/predict")
-def predict(data: dict):
-    try:
-        # Extract input features
-        sst = float(data["sst"])
-        land_temp = float(data["land_temp"])
-        co2 = float(data["co2"])
-        precip = float(data["precip"])
-        tas = float(data.get("tas", 14.0))  # optional "last tas" value
+def predict(data: Inputs):
+    X = [[
+        data.sst,
+        data.co2,
+        data.land_temp,
+        data.precip,
+        last_tas
+    ]]
+    pred = model.predict(pd.DataFrame(X, columns=["sst","co2","land_temp","precip","tas"]))[0]
 
-        # Prepare input vector
-        X = np.array([[sst, land_temp, co2, precip, tas]])
-        raw_pred = model.predict(X)[0]
+    alpha = 0.7
+    calibrated = alpha * pred + (1 - alpha) * last_tas
 
-        # Simple calibration step (example)
-        calibrated = (raw_pred + tas) / 2  
+    return {
+        "last_tas": float(last_tas),
+        "raw_predicted_tas": float(pred),
+        "calibrated_predicted_tas": float(calibrated)
+    }
 
-        return {
-            "last_tas": tas,
-            "raw_predicted_tas": float(raw_pred),
-            "calibrated_predicted_tas": float(calibrated)
-        }
-    except Exception as e:
-        return {"error": str(e)}
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8080))
+    uvicorn.run(app, host="0.0.0.0", port=port)
