@@ -1,59 +1,48 @@
 from fastapi import FastAPI
-from pydantic import BaseModel
+from fastapi.middleware.cors import CORSMiddleware
 import joblib
 import numpy as np
-import json
-import os
 
 # Initialize FastAPI app
-app = FastAPI(title="Climate Prediction API")
+app = FastAPI()
 
-# -------------------------
-# Load Model
-# -------------------------
-MODEL_PATH = "climate_model.json"
+# ✅ Enable CORS so your frontend can talk to this API
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],   # in production, replace "*" with your frontend URL
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-# Load XGBoost model from JSON
-import xgboost as xgb
-model = xgb.XGBRegressor()
-model.load_model(MODEL_PATH)
+# Load your model
+model = joblib.load("climate_model.pkl")
 
-# -------------------------
-# Request Schema
-# -------------------------
-class ClimateInput(BaseModel):
-    sst: float        # Sea Surface Temperature anomaly
-    land_temp: float  # Land temperature anomaly
-    co2: float        # CO2 levels (ppm)
-    precip: float     # Precipitation
-    tas: float        # Last known near-surface air temperature
-
-# -------------------------
-# Root Route
-# -------------------------
 @app.get("/")
-def home():
-    return {"message": "🌎 Climate Prediction API is live! Use POST /predict to get predictions."}
+def read_root():
+    return {"message": "🌍 Climate Prediction API is live! Use POST /predict to get predictions."}
 
-# -------------------------
-# Prediction Endpoint
-# -------------------------
 @app.post("/predict")
-def predict(input_data: ClimateInput):
+def predict(data: dict):
     try:
-        # Convert input into model-ready format
-        features = np.array([[input_data.sst, input_data.land_temp, input_data.co2, input_data.precip, input_data.tas]])
+        # Extract input features
+        sst = float(data["sst"])
+        land_temp = float(data["land_temp"])
+        co2 = float(data["co2"])
+        precip = float(data["precip"])
+        tas = float(data.get("tas", 14.0))  # optional "last tas" value
 
-        # Predict raw temperature anomaly
-        raw_pred = model.predict(features)[0]
+        # Prepare input vector
+        X = np.array([[sst, land_temp, co2, precip, tas]])
+        raw_pred = model.predict(X)[0]
 
-        # Optionally apply calibration
-        calibrated_pred = (raw_pred + input_data.tas) / 2
+        # Simple calibration step (example)
+        calibrated = (raw_pred + tas) / 2  
 
         return {
-            "last_tas": input_data.tas,
+            "last_tas": tas,
             "raw_predicted_tas": float(raw_pred),
-            "calibrated_predicted_tas": float(calibrated_pred)
+            "calibrated_predicted_tas": float(calibrated)
         }
     except Exception as e:
         return {"error": str(e)}
