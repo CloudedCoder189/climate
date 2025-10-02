@@ -1,14 +1,15 @@
+import os
 import joblib
 import pandas as pd
 from fastapi import FastAPI
 from pydantic import BaseModel
+import uvicorn
 
-# Load model and features
+# Load model + features
 model = joblib.load("climate_model_regularized.pkl")
 features = joblib.load("features_regularized.pkl")
 
-# Load dataset for last_tas
-df = pd.read_csv("climate_merged.csv")
+df = pd.read_csv("climate_merged.csv", parse_dates=["date"])
 last_tas = df["tas"].iloc[-1]
 
 app = FastAPI()
@@ -18,10 +19,6 @@ class Inputs(BaseModel):
     co2: float
     land_temp: float
     precip: float
-
-@app.get("/")
-def home():
-    return {"status": "ok", "message": "Climate API is running 🚀"}
 
 @app.post("/predict")
 def predict(data: Inputs):
@@ -33,6 +30,7 @@ def predict(data: Inputs):
         last_tas
     ]]
     pred = model.predict(X)[0]
+
     alpha = 0.7
     calibrated = alpha * pred + (1 - alpha) * last_tas
 
@@ -41,3 +39,7 @@ def predict(data: Inputs):
         "raw_predicted_tas": float(pred),
         "calibrated_predicted_tas": float(calibrated)
     }
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8080))  # 👈 Use Render’s PORT
+    uvicorn.run(app, host="0.0.0.0", port=port)
