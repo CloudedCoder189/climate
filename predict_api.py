@@ -107,7 +107,9 @@ def predict(data: dict, debug: int = Query(0, description="Set 1 for full diagno
         # 5️⃣ Predict anomaly & add baseline
         anomaly_pred = float(model.predict(X)[0])
         baseline = compute_baseline()
-        predicted_tas = baseline + anomaly_pred
+        SENSITIVITY = 3.0  # try 2–4 range
+        predicted_tas = baseline + anomaly_pred * SENSITIVITY
+
 
         # 6️⃣ Output
         if debug:
@@ -135,3 +137,4 @@ def predict(data: dict, debug: int = Query(0, description="Set 1 for full diagno
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("predict_api:app", host="0.0.0.0", port=8000, reload=True)
+
