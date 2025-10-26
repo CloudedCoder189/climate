@@ -6,8 +6,9 @@ from itertools import combinations
 from datetime import datetime
 import uvicorn
 from xgboost import XGBRegressor
+from pathlib import Path
 
-
+# === Paths ===
 BASE_DIR = Path(__file__).resolve().parent
 MODEL_PATH = BASE_DIR / "climate_model_advanced.json"
 SCALER_PATH = BASE_DIR / "driver_scaler.pkl"
@@ -108,4 +109,5 @@ def predict(inputs: ClimateInput):
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8080)
+
 
