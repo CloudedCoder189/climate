@@ -1,4 +1,5 @@
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import pandas as pd
 import joblib
@@ -14,12 +15,12 @@ MODEL_PATH = BASE_DIR / "climate_model_advanced.json"
 SCALER_PATH = BASE_DIR / "driver_scaler.pkl"
 DATA_PATH = BASE_DIR / "climate_cleaned.csv"
 
-
 print("📦 Loading model and scaler...")
 model = XGBRegressor()
 model.load_model(MODEL_PATH)
 scaler = joblib.load(SCALER_PATH)
 print("✅ Model and scaler loaded successfully.")
+
 
 # === Feature helpers ===
 def create_lags(df, col, lags):
@@ -27,10 +28,12 @@ def create_lags(df, col, lags):
         df[f"{col}_lag{lag}"] = df[col].shift(lag)
     return df
 
+
 def create_rolls(df, col, windows):
     for w in windows:
         df[f"{col}_roll{w}"] = df[col].rolling(window=w).mean()
     return df
+
 
 def add_interactions(df, cols):
     for c1, c2 in combinations(cols, 2):
@@ -44,6 +47,16 @@ app = FastAPI(
     description="Predicts global temperature anomaly (°C) from CO₂, SST, Precipitation, and TAS inputs.",
     version="3.1"
 )
+
+# === 🔒 Enable CORS for Firebase Frontend ===
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # later replace * with your Firebase URL for security
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 class ClimateInput(BaseModel):
     co2: float
@@ -65,7 +78,7 @@ def predict(inputs: ClimateInput):
     try:
         # --- Load historical data for lag/roll context ---
         hist = pd.read_csv(DATA_PATH, parse_dates=["date"])
-        hist = hist.dropna()  # clean history
+        hist = hist.dropna()
         new = pd.DataFrame([{
             "date": datetime.now(),
             "co2": inputs.co2,
@@ -85,14 +98,12 @@ def predict(inputs: ClimateInput):
             df = create_rolls(df, col, windows)
         df = add_interactions(df, ["co2", "temperature_anomaly", "precip", "sst", "tas"])
 
-        # Fill missing lag/roll values with last known ones (keep new row)
         df = df.fillna(method="ffill")
 
-        # --- Prepare final row for prediction ---
+        # --- Prepare for prediction ---
         X_new = df.drop(columns=["temperature_anomaly", "date"]).iloc[-1:]
         X_scaled = pd.DataFrame(scaler.transform(X_new), columns=scaler.feature_names_in_)
 
-        # --- Predict ---
         pred = model.predict(X_scaled)[0]
 
         return {
@@ -109,5 +120,3 @@ def predict(inputs: ClimateInput):
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8080)
-
-
