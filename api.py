@@ -18,7 +18,7 @@ print("📦 Loading model and scaler...")
 model = XGBRegressor()
 model.load_model(MODEL_PATH)
 scaler = joblib.load(SCALER_PATH)
-print("✅ Model and scaler loaded successfully.")
+print("Model and scaler loaded successfully.")
 
 
 # Helpers for Features
