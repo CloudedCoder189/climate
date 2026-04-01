@@ -9,7 +9,6 @@ import uvicorn
 from xgboost import XGBRegressor
 from pathlib import Path
 
-# === Paths ===
 BASE_DIR = Path(__file__).resolve().parent
 MODEL_PATH = BASE_DIR / "climate_model_advanced.json"
 SCALER_PATH = BASE_DIR / "driver_scaler.pkl"
@@ -22,7 +21,7 @@ scaler = joblib.load(SCALER_PATH)
 print("✅ Model and scaler loaded successfully.")
 
 
-# === Feature helpers ===
+# Helpers for Features
 def create_lags(df, col, lags):
     for lag in lags:
         df[f"{col}_lag{lag}"] = df[col].shift(lag)
@@ -41,17 +40,17 @@ def add_interactions(df, cols):
     return df
 
 
-# === FastAPI App ===
+# Fast API
 app = FastAPI(
     title="🌎 Climate Prediction API",
     description="Predicts global temperature anomaly (°C) from CO₂, SST, Precipitation, and TAS inputs.",
     version="3.1"
 )
 
-# === 🔒 Enable CORS for Firebase Frontend ===
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # later replace * with your Firebase URL for security
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -76,7 +75,6 @@ def root():
 @app.post("/predict")
 def predict(inputs: ClimateInput):
     try:
-        # --- Load historical data for lag/roll context ---
         hist = pd.read_csv(DATA_PATH, parse_dates=["date"])
         hist = hist.dropna()
         new = pd.DataFrame([{
@@ -87,10 +85,10 @@ def predict(inputs: ClimateInput):
             "tas": inputs.tas
         }])
 
-        # Merge last 36 months + new sample
+        # Combines last 36 months
         df = pd.concat([hist.tail(36), new], ignore_index=True)
 
-        # --- Rebuild features (same as training) ---
+        # Rebuilds Training
         lags = [1, 3, 6, 12, 24, 36]
         windows = [3, 6, 12, 24]
         for col in ["co2", "temperature_anomaly", "precip", "sst", "tas"]:
@@ -100,7 +98,7 @@ def predict(inputs: ClimateInput):
 
         df = df.fillna(method="ffill")
 
-        # --- Prepare for prediction ---
+        # Predictions
         X_new = df.drop(columns=["temperature_anomaly", "date"]).iloc[-1:]
         X_scaled = pd.DataFrame(scaler.transform(X_new), columns=scaler.feature_names_in_)
 
