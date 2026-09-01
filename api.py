@@ -55,7 +55,6 @@ def load_scaler():
 
 
 def load_history() -> tuple[pd.DataFrame | None, str | None]:
-    """Load historical context without making the whole API crash if it is absent."""
     if not DATA_PATH.is_file():
         return None, f"Required historical context file is missing: {DATA_PATH.name}"
 
