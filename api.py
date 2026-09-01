@@ -140,7 +140,7 @@ def predict(inputs: ClimateInput):
                 {
                     "date": pd.Timestamp.now(),
                     "co2": inputs.co2,
-                    "temperature_anomaly": pd.NA,
+                    "temperature_anomaly": float("nan"),
                     "precip": inputs.precip,
                     "sst": inputs.sst,
                     "tas": inputs.tas,
