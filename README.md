@@ -1,96 +1,104 @@
 # Climate Prediction API
 
-A machine-learning API for estimating global temperature anomaly from climate indicators including atmospheric CO₂, sea-surface temperature, precipitation, and near-surface air temperature.
+A FastAPI service built around an XGBoost regression model for predicting global temperature anomaly from climate-driver inputs.
 
-## Overview
+## Inputs
 
-This project uses an XGBoost regression model exposed through a FastAPI backend. The API reconstructs the same feature pipeline used during training, including lagged values, rolling averages, and interaction features, before generating a temperature-anomaly prediction.
+The API accepts four current climate variables:
 
-### Inputs
+- `co2` — atmospheric CO₂
+- `sst` — sea-surface temperature
+- `precip` — precipitation
+- `tas` — near-surface air temperature
 
-- CO₂ concentration
-- Sea-surface temperature (SST)
-- Precipitation
-- Near-surface air temperature (TAS)
+The trained model also depends on lagged, rolling, and interaction features built from historical climate data.
 
-### Output
+## Important data requirement
 
-The `/predict` endpoint returns the estimated global temperature anomaly in °C along with model metadata.
+The trained model and scaler are included in this repository, but the historical context file `climate_cleaned.csv` is **not currently included**. That file is required to reconstruct the same lag and rolling features used by the model.
+
+The API now handles this explicitly:
+
+- `GET /health` reports whether the service is ready for predictions.
+- `POST /predict` returns HTTP `503` when the historical context file is unavailable.
+- `climate_cleaned.example.csv` documents the expected column schema.
+
+Required columns:
+
+```text
+date, co2, temperature_anomaly, precip, sst, tas
+```
+
+At least 36 complete historical rows are required because the longest model lag is 36 periods.
 
 ## Model
 
-The prediction pipeline uses:
+- Algorithm: XGBoost regression
+- Reported RMSE: `0.072 °C`
+- Reported R²: `0.85`
+- Feature engineering: lag features, rolling means, and pairwise interactions
 
-- XGBoost regression
-- Standardized numerical features
-- Lag features at 1, 3, 6, 12, 24, and 36 months
-- Rolling averages over 3, 6, 12, and 24 months
-- Pairwise interaction features between climate variables
+The reported metrics are values associated with the existing trained artifact; this repository does not currently include the original training/evaluation pipeline needed to reproduce them from scratch.
 
-Current model metadata reported by the API:
+## Project structure
 
-- RMSE: 0.072 °C
-- R²: 0.85
+```text
+.
+├── api.py
+├── climate_model_advanced.json
+├── driver_scaler.pkl
+├── climate_cleaned.example.csv
+├── requirements.txt
+├── Procfile
+└── README.md
+```
 
-## Tech Stack
+When available, place the real historical file at:
 
-- Python
-- FastAPI
-- XGBoost
-- pandas
-- scikit-learn / joblib
-- Uvicorn
+```text
+climate_cleaned.csv
+```
 
-## API Usage
+in the repository root.
 
-Run the API locally:
+## Run locally
+
+```bash
+git clone https://github.com/CloudedCoder189/climate.git
+cd climate
+python -m venv .venv
+```
+
+Activate the environment, then install dependencies:
 
 ```bash
 pip install -r requirements.txt
+```
+
+Start the API:
+
+```bash
 uvicorn api:app --reload
 ```
 
-Then send a POST request to `/predict` with JSON in this format:
+Interactive API documentation is available at `/docs`.
 
-```json
-{
-  "co2": 420.0,
-  "sst": 0.6,
-  "precip": 2.8,
-  "tas": 1.1
-}
+## Example request
+
+```bash
+curl -X POST http://127.0.0.1:8000/predict \
+  -H "Content-Type: application/json" \
+  -d '{"co2": 420.0, "sst": 20.1, "precip": 2.7, "tas": 14.9}'
 ```
 
-Example response:
+A prediction is returned only when the required historical context has loaded successfully.
 
-```json
-{
-  "predicted_temperature_anomaly": 1.2345,
-  "units": "°C",
-  "model_version": "5-dataset (CO₂, SST, Precip, TAS)",
-  "model_rmse": "0.072 °C",
-  "r2": "0.85"
-}
-```
+## Tech stack
 
-## Project Structure
-
-```text
-climate/
-├── api.py                       # FastAPI application and feature pipeline
-├── climate_model_advanced.json  # Trained XGBoost model
-├── driver_scaler.pkl            # Saved feature scaler
-├── requirements.txt             # Python dependencies
-└── Procfile                     # Deployment process definition
-```
-
-## Notes
-
-The API requires the historical climate dataset used to reconstruct lag and rolling features at prediction time. The model and preprocessing artifacts are stored separately from the API code.
-
-## Future Improvements
-
-- Package the feature-engineering pipeline separately from the API layer
-- Add automated tests for the prediction endpoint
-- Add model evaluation plots and a reproducible training notebook
-- Improve deployment and dataset handling
+- Python
+- FastAPI
+- pandas
+- XGBoost
+- scikit-learn
+- joblib
+- Uvicorn
