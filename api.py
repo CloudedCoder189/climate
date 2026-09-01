@@ -1,58 +1,99 @@
-from fastapi import FastAPI, HTTPException
+from itertools import combinations
+from pathlib import Path
+
+import joblib
+import pandas as pd
+import uvicorn
+from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import pandas as pd
-import joblib
-from itertools import combinations
-from datetime import datetime
-import uvicorn
 from xgboost import XGBRegressor
-from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
 MODEL_PATH = BASE_DIR / "climate_model_advanced.json"
 SCALER_PATH = BASE_DIR / "driver_scaler.pkl"
 DATA_PATH = BASE_DIR / "climate_cleaned.csv"
 
-print("📦 Loading model and scaler...")
-model = XGBRegressor()
-model.load_model(MODEL_PATH)
-scaler = joblib.load(SCALER_PATH)
-print("Model and scaler loaded successfully.")
+LAGS = (1, 3, 6, 12, 24, 36)
+ROLLING_WINDOWS = (3, 6, 12, 24)
+DRIVER_COLUMNS = ("co2", "temperature_anomaly", "precip", "sst", "tas")
+REQUIRED_HISTORY_COLUMNS = {"date", *DRIVER_COLUMNS}
+
+MODEL_VERSION = "5-dataset (CO₂, SST, Precip, TAS)"
+MODEL_RMSE = "0.072 °C"
+MODEL_R2 = "0.85"
 
 
-# Helpers for Features
-def create_lags(df, col, lags):
-    for lag in lags:
-        df[f"{col}_lag{lag}"] = df[col].shift(lag)
-    return df
+def create_lags(dataframe: pd.DataFrame, column: str) -> None:
+    for lag in LAGS:
+        dataframe[f"{column}_lag{lag}"] = dataframe[column].shift(lag)
 
 
-def create_rolls(df, col, windows):
-    for w in windows:
-        df[f"{col}_roll{w}"] = df[col].rolling(window=w).mean()
-    return df
+def create_rolling_means(dataframe: pd.DataFrame, column: str) -> None:
+    for window in ROLLING_WINDOWS:
+        dataframe[f"{column}_roll{window}"] = dataframe[column].rolling(window=window).mean()
 
 
-def add_interactions(df, cols):
-    for c1, c2 in combinations(cols, 2):
-        df[f"{c1}_x_{c2}"] = df[c1] * df[c2]
-    return df
+def add_interactions(dataframe: pd.DataFrame) -> None:
+    for first, second in combinations(DRIVER_COLUMNS, 2):
+        dataframe[f"{first}_x_{second}"] = dataframe[first] * dataframe[second]
 
 
-# Fast API
+def load_model() -> XGBRegressor:
+    if not MODEL_PATH.is_file():
+        raise RuntimeError(f"Model file not found: {MODEL_PATH.name}")
+
+    model = XGBRegressor()
+    model.load_model(MODEL_PATH)
+    return model
+
+
+def load_scaler():
+    if not SCALER_PATH.is_file():
+        raise RuntimeError(f"Scaler file not found: {SCALER_PATH.name}")
+    return joblib.load(SCALER_PATH)
+
+
+def load_history() -> tuple[pd.DataFrame | None, str | None]:
+    """Load historical context without making the whole API crash if it is absent."""
+    if not DATA_PATH.is_file():
+        return None, f"Required historical context file is missing: {DATA_PATH.name}"
+
+    try:
+        history = pd.read_csv(DATA_PATH, parse_dates=["date"])
+    except Exception as exc:
+        return None, f"Could not read {DATA_PATH.name}: {exc}"
+
+    missing_columns = REQUIRED_HISTORY_COLUMNS.difference(history.columns)
+    if missing_columns:
+        missing = ", ".join(sorted(missing_columns))
+        return None, f"Historical data is missing required columns: {missing}"
+
+    history = history.dropna(subset=list(REQUIRED_HISTORY_COLUMNS)).copy()
+    if len(history) < max(LAGS):
+        return None, f"Historical data needs at least {max(LAGS)} complete rows."
+
+    return history, None
+
+
+model = load_model()
+scaler = load_scaler()
+history, history_error = load_history()
+
 app = FastAPI(
-    title="🌎 Climate Prediction API",
-    description="Predicts global temperature anomaly (°C) from CO₂, SST, Precipitation, and TAS inputs.",
-    version="3.1"
+    title="Climate Prediction API",
+    description=(
+        "Predicts global temperature anomaly from CO₂, sea-surface temperature, "
+        "precipitation, and near-surface air temperature inputs."
+    ),
+    version="3.2",
 )
-
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
+    allow_credentials=False,
+    allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
 
@@ -67,53 +108,80 @@ class ClimateInput(BaseModel):
 @app.get("/")
 def root():
     return {
-        "message": "🌎 Climate Prediction API is live!",
-        "usage": "POST /predict with co2, sst, precip, tas"
+        "message": "Climate Prediction API",
+        "ready": history is not None,
+        "docs": "/docs",
+        "health": "/health",
+    }
+
+
+@app.get("/health")
+def health():
+    return {
+        "ready": history is not None,
+        "model_loaded": True,
+        "scaler_loaded": True,
+        "historical_data_loaded": history is not None,
+        "historical_data_error": history_error,
     }
 
 
 @app.post("/predict")
 def predict(inputs: ClimateInput):
+    if history is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=history_error or "Historical data is unavailable.",
+        )
+
     try:
-        hist = pd.read_csv(DATA_PATH, parse_dates=["date"])
-        hist = hist.dropna()
-        new = pd.DataFrame([{
-            "date": datetime.now(),
-            "co2": inputs.co2,
-            "sst": inputs.sst,
-            "precip": inputs.precip,
-            "tas": inputs.tas
-        }])
+        new_row = pd.DataFrame(
+            [
+                {
+                    "date": pd.Timestamp.now(),
+                    "co2": inputs.co2,
+                    "temperature_anomaly": pd.NA,
+                    "precip": inputs.precip,
+                    "sst": inputs.sst,
+                    "tas": inputs.tas,
+                }
+            ]
+        )
 
-        # Combines last 36 months
-        df = pd.concat([hist.tail(36), new], ignore_index=True)
+        features_frame = pd.concat([history.tail(max(LAGS)), new_row], ignore_index=True)
 
-        # Rebuilds Training
-        lags = [1, 3, 6, 12, 24, 36]
-        windows = [3, 6, 12, 24]
-        for col in ["co2", "temperature_anomaly", "precip", "sst", "tas"]:
-            df = create_lags(df, col, lags)
-            df = create_rolls(df, col, windows)
-        df = add_interactions(df, ["co2", "temperature_anomaly", "precip", "sst", "tas"])
+        for column in DRIVER_COLUMNS:
+            create_lags(features_frame, column)
+            create_rolling_means(features_frame, column)
+        add_interactions(features_frame)
 
-        df = df.fillna(method="ffill")
+        features_frame = features_frame.ffill()
+        prediction_row = features_frame.drop(columns=["temperature_anomaly", "date"]).iloc[-1:]
 
-        # Predictions
-        X_new = df.drop(columns=["temperature_anomaly", "date"]).iloc[-1:]
-        X_scaled = pd.DataFrame(scaler.transform(X_new), columns=scaler.feature_names_in_)
+        expected_features = list(scaler.feature_names_in_)
+        missing_features = set(expected_features).difference(prediction_row.columns)
+        if missing_features:
+            missing = ", ".join(sorted(missing_features))
+            raise RuntimeError(f"Prediction features do not match the scaler. Missing: {missing}")
 
-        pred = model.predict(X_scaled)[0]
+        prediction_row = prediction_row.reindex(columns=expected_features)
+        scaled_features = scaler.transform(prediction_row)
+        prediction = model.predict(scaled_features)[0]
 
         return {
-            "predicted_temperature_anomaly": round(float(pred), 4),
+            "predicted_temperature_anomaly": round(float(prediction), 4),
             "units": "°C",
-            "model_version": "5-dataset (CO₂, SST, Precip, TAS)",
-            "model_rmse": "0.072 °C",
-            "r2": "0.85"
+            "model_version": MODEL_VERSION,
+            "model_rmse": MODEL_RMSE,
+            "r2": MODEL_R2,
         }
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Prediction error: {e}")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Prediction failed because the model inputs could not be prepared.",
+        ) from exc
 
 
 if __name__ == "__main__":
